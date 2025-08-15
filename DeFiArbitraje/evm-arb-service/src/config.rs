@@ -463,6 +463,12 @@ pub struct Strategy {
     #[serde(default)]
     pub search_space: Option<String>,
     #[serde(default)]
+    pub whitelist_dexes: Option<Vec<String>>,
+    #[serde(default)]
+    pub whitelist_pairs: Option<Vec<[String; 2]>>,
+    #[serde(default)]
+    pub only_stables: Option<bool>,
+    #[serde(default)]
     pub mev: Option<HashMap<String, serde_json::Value>>,
 }
 
