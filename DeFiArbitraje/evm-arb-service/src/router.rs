@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use ethers::providers::{Http, Middleware, Provider};
+use ethers::providers::{Http, Provider};
 use ethers::types::{Address, U256};
 use std::sync::Arc;
 use tracing::debug;
@@ -12,12 +12,14 @@ use crate::dex::{
     v3_quote_exact_input_single,
 };
 use crate::utils::parse_addr;
+use crate::utils_gas::{current_gas_price_legacy, gas_cost_native, gas_cost_usd};
 
 /// Результат квотинга маршрута
 pub struct QuoteResult {
     pub amount_in: U256,
     pub amount_out: U256,
     pub gas_estimate: u64,
+    pub gas_price: U256,
     pub legs: Vec<LegQuote>,
     pub pnl_usd: f64,
 }
@@ -201,37 +203,6 @@ async fn quote_on_dex(
     }
 }
 
-async fn estimate_pnl_usd(
-    client: Arc<Provider<Http>>,
-    net: &Network,
-    start_sym: &str,
-    amount_in: U256,
-    amount_out: U256,
-    gas_estimate: u64,
-) -> Result<f64> {
-    let price_hint = match net.native_usd_hint {
-        Some(p) => p,
-        None => return Ok(0.0),
-    };
-    let gas_price = client.get_gas_price().await?;
-    let gas_price_native = (gas_price.as_u128() as f64) / 1e18f64;
-    let gas_cost_native = gas_price_native * gas_estimate as f64;
-
-    let mut profit_native = 0.0f64;
-    if is_native_symbol(net, start_sym) {
-        let dec = decimals_of(net, start_sym) as i32;
-        let diff = if amount_out > amount_in {
-            amount_out - amount_in
-        } else {
-            U256::zero()
-        };
-        profit_native = (diff.as_u128() as f64) / 10f64.powi(dec);
-    }
-
-    let pnl_native = profit_native - gas_cost_native;
-    Ok(pnl_native * price_hint)
-}
-
 pub async fn quote_cross_dex_pair(
     client: Arc<Provider<Http>>,
     net: &Network,
@@ -265,8 +236,22 @@ pub async fn quote_cross_dex_pair(
     amount = out2;
 
     let gas_estimate = ((gas_total as f64) * 1.15).ceil() as u64;
-    let pnl_usd =
-        estimate_pnl_usd(client.clone(), net, sym_a, amount_in, amount, gas_estimate).await?;
+    let gas_price = current_gas_price_legacy(client.clone()).await?;
+    let gas_cost_native = gas_cost_native(gas_estimate, gas_price);
+    let gas_cost_usd_opt = net.native_usd_hint.map(|p| gas_cost_usd(gas_cost_native, p));
+
+    let mut profit_native = 0.0f64;
+    if is_native_symbol(net, sym_a) {
+        let dec = decimals_of(net, sym_a) as i32;
+        let diff = if amount > amount_in { amount - amount_in } else { U256::zero() };
+        profit_native = (diff.as_u128() as f64) / 10f64.powi(dec);
+    }
+    let pnl_native = profit_native - gas_cost_native;
+    let pnl_usd = if let Some(price_hint) = net.native_usd_hint {
+        gas_cost_usd(pnl_native, price_hint)
+    } else {
+        0.0
+    };
     let min_out = min_out_bps(amount, slip_bps);
     if min_out <= amount_in {
         return Ok(None);
@@ -274,17 +259,30 @@ pub async fn quote_cross_dex_pair(
     if amount <= amount_in {
         return Ok(None);
     }
-    debug!(
-        "candidate pnl_usd={:.4}, gas={}, legs={}",
-        pnl_usd,
-        gas_estimate,
-        legs.len()
-    );
+    if let Some(cost_usd) = gas_cost_usd_opt {
+        debug!(
+            "candidate pnl_usd={:.4}, gas={}, gas_price={}, gas_cost_usd={:.4}, legs={}",
+            pnl_usd,
+            gas_estimate,
+            gas_price,
+            cost_usd,
+            legs.len()
+        );
+    } else {
+        debug!(
+            "candidate pnl_usd={:.4}, gas={}, gas_price={}, legs={}",
+            pnl_usd,
+            gas_estimate,
+            gas_price,
+            legs.len()
+        );
+    }
 
     Ok(Some(QuoteResult {
         amount_in,
         amount_out: amount,
         gas_estimate,
+        gas_price,
         legs,
         pnl_usd,
     }))
@@ -334,7 +332,22 @@ pub async fn quote_triangle(
     }
 
     let gas_estimate = ((gas_total as f64) * 1.15).ceil() as u64;
-    let pnl_usd = estimate_pnl_usd(client.clone(), net, a, amount_in, amount, gas_estimate).await?;
+    let gas_price = current_gas_price_legacy(client.clone()).await?;
+    let gas_cost_native = gas_cost_native(gas_estimate, gas_price);
+    let gas_cost_usd_opt = net.native_usd_hint.map(|p| gas_cost_usd(gas_cost_native, p));
+
+    let mut profit_native = 0.0f64;
+    if is_native_symbol(net, a) {
+        let dec = decimals_of(net, a) as i32;
+        let diff = if amount > amount_in { amount - amount_in } else { U256::zero() };
+        profit_native = (diff.as_u128() as f64) / 10f64.powi(dec);
+    }
+    let pnl_native = profit_native - gas_cost_native;
+    let pnl_usd = if let Some(price_hint) = net.native_usd_hint {
+        gas_cost_usd(pnl_native, price_hint)
+    } else {
+        0.0
+    };
     let min_out = min_out_bps(amount, slip_bps);
     if min_out <= amount_in {
         return Ok(None);
@@ -342,17 +355,30 @@ pub async fn quote_triangle(
     if amount <= amount_in {
         return Ok(None);
     }
-    debug!(
-        "candidate pnl_usd={:.4}, gas={}, legs={}",
-        pnl_usd,
-        gas_estimate,
-        legs.len()
-    );
+    if let Some(cost_usd) = gas_cost_usd_opt {
+        debug!(
+            "candidate pnl_usd={:.4}, gas={}, gas_price={}, gas_cost_usd={:.4}, legs={}",
+            pnl_usd,
+            gas_estimate,
+            gas_price,
+            cost_usd,
+            legs.len()
+        );
+    } else {
+        debug!(
+            "candidate pnl_usd={:.4}, gas={}, gas_price={}, legs={}",
+            pnl_usd,
+            gas_estimate,
+            gas_price,
+            legs.len()
+        );
+    }
 
     Ok(Some(QuoteResult {
         amount_in,
         amount_out: amount,
         gas_estimate,
+        gas_price,
         legs,
         pnl_usd,
     }))
