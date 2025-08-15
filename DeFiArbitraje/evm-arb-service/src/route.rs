@@ -14,7 +14,10 @@ use crate::approvals::ensure_approvals;
 use crate::calldata::encode_route_calldata;
 use crate::config::{Config, Network};
 use crate::exec::Executor;
-use crate::metrics::{METRIC_PROFITABLE_FOUND, METRIC_ROUTES_SCANNED, METRIC_TX_SENT};
+use crate::metrics::{
+    METRIC_BEST_PNL_USD, METRIC_EXEC_FAIL, METRIC_EXEC_OK, METRIC_LAST_SIM_GAS, METRIC_OPPS_FOUND,
+    METRIC_PROFITABLE_FOUND, METRIC_ROUTES_SCANNED, METRIC_TX_SENT,
+};
 use crate::network::{ChainClient, MultiChain};
 use crate::router::{QuoteResult, quote_cross_dex_pair};
 use crate::utils::{bps, parse_addr, u256_from_decimals};
@@ -289,6 +292,12 @@ impl StrategyEngine {
                     )
                     .await?
                     {
+                        let chain_label = client.cfg.chain_id.to_string();
+                        METRIC_OPPS_FOUND.inc();
+                        METRIC_BEST_PNL_USD
+                            .with_label_values(&[&chain_label])
+                            .set(qr.pnl_usd);
+
                         let profit = qr.amount_out.saturating_sub(qr.amount_in);
                         let min_profit = qr.amount_in * U256::from(min_profit_bps as u64)
                             / U256::from(10_000u64);
@@ -305,17 +314,26 @@ impl StrategyEngine {
                             let route_calldata =
                                 encode_route_calldata(&qr.legs, qr.amount_in, qr.amount_out)?;
                             let _ = exec.simulate(route_calldata.clone()).await;
+                            METRIC_LAST_SIM_GAS
+                                .with_label_values(&[&chain_label])
+                                .set(qr.gas_estimate as f64);
                             if let Some(mode) = run_mode() {
                                 tracing::info!(
                                     chain = client.cfg.chain_id,
                                     "{mode}: not sending tx"
                                 );
-                            } else if let Ok(_tx) =
-                                exec.execute(route_calldata.clone(), U256::zero()).await
-                            {
-                                METRIC_TX_SENT.inc();
-                                METRIC_PROFITABLE_FOUND.inc();
-                                any_success = true;
+                            } else {
+                                match exec.execute(route_calldata.clone(), U256::zero()).await {
+                                    Ok(_tx) => {
+                                        METRIC_TX_SENT.inc();
+                                        METRIC_PROFITABLE_FOUND.inc();
+                                        METRIC_EXEC_OK.with_label_values(&[&chain_label]).inc();
+                                        any_success = true;
+                                    }
+                                    Err(_e) => {
+                                        METRIC_EXEC_FAIL.with_label_values(&[&chain_label]).inc();
+                                    }
+                                }
                             }
                         }
                     }
