@@ -8,6 +8,7 @@ mod metrics;
 mod mev;
 mod network;
 mod route;
+mod router;
 mod utils;
 
 use anyhow::{Context, Result};
