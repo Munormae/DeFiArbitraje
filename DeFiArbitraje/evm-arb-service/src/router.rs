@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use ethers::types::{Address, U256};
 use tracing::debug;
 
@@ -7,9 +7,8 @@ use crate::network::ChainClient;
 use crate::calldata::{LegKind, LegQuote};
 use crate::config::{DexConfig, Network};
 use crate::dex::{
-    V2Pair, amount_out_v2, ensure_not_zero, min_out_bps, solidly_get_pair,
-    solidly_pair_get_amount_out, v2_get_pair, v2_pair_tokens, v3_get_pool,
-    v3_quote_exact_input_single,
+    amount_out_v2, ensure_not_zero, min_out_bps, solidly_get_pair, solidly_pair_get_amount_out,
+    v2_get_pair, v2_pair_tokens, v3_get_pool, v3_quote_exact_input_single, V2Pair,
 };
 use crate::utils::parse_addr;
 use crate::utils_gas::{current_gas_price_legacy, gas_cost_native, gas_cost_usd};
@@ -190,7 +189,9 @@ async fn quote_on_dex(
             if pair_addr == Address::zero() && dex.stable_pools.unwrap_or(false) {
                 stable = true;
                 pair_addr = client
-                    .with_failover(|p| solidly_get_pair(p.clone(), factory, token_in, token_out, true))
+                    .with_failover(|p| {
+                        solidly_get_pair(p.clone(), factory, token_in, token_out, true)
+                    })
                     .await?;
             }
             if pair_addr == Address::zero() {
@@ -232,20 +233,18 @@ pub async fn quote_cross_dex_pair(
     let mut gas_total = 0u64;
 
     let mut amount = amount_in;
-    let (out1, leg1, gas1) =
-        match quote_on_dex(client, net, dex_a, sym_a, sym_b, amount).await? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
+    let (out1, leg1, gas1) = match quote_on_dex(client, net, dex_a, sym_a, sym_b, amount).await? {
+        Some(v) => v,
+        None => return Ok(None),
+    };
     legs.push(leg1);
     gas_total += gas1;
     amount = out1;
 
-    let (out2, leg2, gas2) =
-        match quote_on_dex(client, net, dex_b, sym_b, sym_a, amount).await? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
+    let (out2, leg2, gas2) = match quote_on_dex(client, net, dex_b, sym_b, sym_a, amount).await? {
+        Some(v) => v,
+        None => return Ok(None),
+    };
     legs.push(leg2);
     gas_total += gas2;
     amount = out2;
@@ -255,20 +254,27 @@ pub async fn quote_cross_dex_pair(
         .with_failover(|p| current_gas_price_legacy(p.clone()))
         .await?;
     let gas_cost_native = gas_cost_native(gas_estimate, gas_price);
-    let gas_cost_usd_opt = net.native_usd_hint.map(|p| gas_cost_usd(gas_cost_native, p));
 
     let mut profit_native = 0.0f64;
     if is_native_symbol(net, sym_a) {
         let dec = decimals_of(net, sym_a) as i32;
-        let diff = if amount > amount_in { amount - amount_in } else { U256::zero() };
+        let diff = if amount > amount_in {
+            amount - amount_in
+        } else {
+            U256::zero()
+        };
         profit_native = (diff.as_u128() as f64) / 10f64.powi(dec);
     }
     let pnl_native = profit_native - gas_cost_native;
-    let pnl_usd = if let Some(price_hint) = net.native_usd_hint {
-        gas_cost_usd(pnl_native, price_hint)
-    } else {
-        0.0
-    };
+    let (pnl_usd, gas_cost_usd_opt) = net
+        .native_usd_hint
+        .map(|price| {
+            (
+                gas_cost_usd(pnl_native, price),
+                Some(gas_cost_usd(gas_cost_native, price)),
+            )
+        })
+        .unwrap_or((0.0, None));
     let min_out = min_out_bps(amount, slip_bps);
     if min_out <= amount_in {
         return Ok(None);
@@ -353,20 +359,27 @@ pub async fn quote_triangle(
         .with_failover(|p| current_gas_price_legacy(p.clone()))
         .await?;
     let gas_cost_native = gas_cost_native(gas_estimate, gas_price);
-    let gas_cost_usd_opt = net.native_usd_hint.map(|p| gas_cost_usd(gas_cost_native, p));
 
     let mut profit_native = 0.0f64;
     if is_native_symbol(net, a) {
         let dec = decimals_of(net, a) as i32;
-        let diff = if amount > amount_in { amount - amount_in } else { U256::zero() };
+        let diff = if amount > amount_in {
+            amount - amount_in
+        } else {
+            U256::zero()
+        };
         profit_native = (diff.as_u128() as f64) / 10f64.powi(dec);
     }
     let pnl_native = profit_native - gas_cost_native;
-    let pnl_usd = if let Some(price_hint) = net.native_usd_hint {
-        gas_cost_usd(pnl_native, price_hint)
-    } else {
-        0.0
-    };
+    let (pnl_usd, gas_cost_usd_opt) = net
+        .native_usd_hint
+        .map(|price| {
+            (
+                gas_cost_usd(pnl_native, price),
+                Some(gas_cost_usd(gas_cost_native, price)),
+            )
+        })
+        .unwrap_or((0.0, None));
     let min_out = min_out_bps(amount, slip_bps);
     if min_out <= amount_in {
         return Ok(None);
