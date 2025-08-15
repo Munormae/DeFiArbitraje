@@ -1,12 +1,11 @@
-use hyper::{Body, Request, Response, Server, StatusCode};
 use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server, StatusCode};
 use lazy_static::lazy_static;
 use prometheus::{
-    IntCounter, IntGauge, TextEncoder,
-    register_int_counter, register_int_gauge,
+    Counter, CounterVec, GaugeVec, IntCounter, IntGauge, TextEncoder, register_counter,
+    register_counter_vec, register_gauge_vec, register_int_counter, register_int_gauge,
 };
 use std::convert::Infallible;
-
 
 lazy_static! {
     pub static ref METRIC_ROUTES_SCANNED: IntCounter = register_int_counter!(
@@ -41,6 +40,35 @@ lazy_static! {
         "metrics_last_scrape_ms",
         "Last /metrics scrape time (unix ms)"
     ).expect("register metrics_last_scrape_ms");
+
+    pub static ref METRIC_OPPS_FOUND: Counter = register_counter!(
+        "opportunities_found_total",
+        "Total quote opportunities found",
+    ).expect("register opportunities_found_total");
+
+    pub static ref METRIC_BEST_PNL_USD: GaugeVec = register_gauge_vec!(
+        "best_pnl_usd",
+        "Best PnL in USD by chain",
+        & ["chain"]
+    ).expect("register best_pnl_usd");
+
+    pub static ref METRIC_LAST_SIM_GAS: GaugeVec = register_gauge_vec!(
+        "last_sim_gas",
+        "Last gas estimate from simulation by chain",
+        & ["chain"]
+    ).expect("register last_sim_gas");
+
+    pub static ref METRIC_EXEC_OK: CounterVec = register_counter_vec!(
+        "exec_success_total",
+        "Total successful executions by chain",
+        & ["chain"]
+    ).expect("register exec_success_total");
+
+    pub static ref METRIC_EXEC_FAIL: CounterVec = register_counter_vec!(
+        "exec_fail_total",
+        "Total failed executions by chain",
+        & ["chain"]
+    ).expect("register exec_fail_total");
 }
 
 /// HTTP-хендлер: роутим /metrics и /healthz
