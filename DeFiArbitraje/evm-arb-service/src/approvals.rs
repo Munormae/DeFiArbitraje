@@ -28,7 +28,10 @@ where
     S: Signer + 'static,
 {
     let me = sm.address();
-    let dry = std::env::var("DRY_RUN").is_ok() || std::env::var("SAFE_LAUNCH").is_ok();
+    let dry = std::env::var("DRY_RUN").map(|v| v == "1").unwrap_or(false)
+        || std::env::var("SAFE_LAUNCH")
+            .map(|v| v == "1")
+            .unwrap_or(false);
     let permit2 = if net.permit2.is_empty() {
         None
     } else {

@@ -11,6 +11,26 @@ RUST_LOG=info ./target/debug/evm-arb-service /mnt/data/defi_config.json
 Использует `defi_config.json` (создан ранее). Адреса экзекутора передаются через ENV:
 - `EXECUTOR_8453`, `EXECUTOR_42161`, `EXECUTOR_56`, `EXECUTOR_10`, `EXECUTOR_137`
 
+## Запуск и ENV
+- `DRY_RUN=1` или `SAFE_LAUNCH=1` — не отправлять approve/execute, но писать кандидатов в `logs/` и вызывать `simulate`.
+- `EXECUTOR_<chainId>` — адрес on-chain экзекутора для каждой сети (например, `EXECUTOR_8453`).
+- `PRIVATE_KEY` или `PRIVATE_KEY_<chainId>` — ключ для подписи транзакций.
+
+### Примеры
+PowerShell:
+```powershell
+$env:DRY_RUN="1"
+$env:EXECUTOR_8453="0xabc..."
+$env:PRIVATE_KEY="0xdef..."
+RUST_LOG=info cargo run -p evm-arb-service -- ..\defi_config.json
+```
+
+Bash:
+```bash
+DRY_RUN=1 EXECUTOR_8453=0xabc... PRIVATE_KEY=0xdef... \
+  RUST_LOG=info cargo run -p evm-arb-service -- ./defi_config.json
+```
+
 ## Что реализовано
 - Загрузка конфига, мультисеть, скан кандидатов (pairs/routes/triangles)
 - Квоты: v2 getReserves, упрощённый v3 (slot0+liq), Solidly getAmountOut (если доступен pair)
