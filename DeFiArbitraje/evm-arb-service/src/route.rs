@@ -1,11 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, U256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::approvals::ensure_approvals;
 use crate::config::{Config, Network};
 use crate::exec::{Executor, TxOpts};
 use crate::metrics::{METRIC_PROFITABLE_FOUND, METRIC_ROUTES_SCANNED, METRIC_TX_SENT};
@@ -34,21 +35,72 @@ pub struct StrategyEngine {
 }
 
 impl StrategyEngine {
-    pub async fn new(cfg: Config, chains: Arc<MultiChain>, planner: Arc<RoutePlanner>) -> Result<Self> {
-        let mut executors: HashMap<u64, Arc<Executor<Provider<Http>, LocalWallet>>> = HashMap::new();
+    pub async fn new(
+        cfg: Config,
+        chains: Arc<MultiChain>,
+        planner: Arc<RoutePlanner>,
+    ) -> Result<Self> {
+        let mut executors: HashMap<u64, Arc<Executor<Provider<Http>, LocalWallet>>> =
+            HashMap::new();
 
         for (chain_id, client) in chains.clients.iter() {
             let env_key_exec = format!("EXECUTOR_{}", chain_id);
             if std::env::var(&env_key_exec).is_err() {
-                tracing::debug!("Executor не задан для chain_id={} (нет ENV {})", chain_id, env_key_exec);
+                tracing::debug!(
+                    "Executor не задан для chain_id={} (нет ENV {})",
+                    chain_id,
+                    env_key_exec
+                );
                 continue;
             }
 
             match signer_middleware_for_chain(client.provider.clone(), *chain_id) {
                 Ok(signer_client) => {
-                    let exec = Executor::new(signer_client).await?;
+                    let exec = Executor::new(signer_client.clone()).await?;
                     executors.insert(*chain_id, Arc::new(exec));
                     tracing::info!("Executor инициализирован для chain_id={}", chain_id);
+
+                    if cfg.global.execution.approve_spend_on_start {
+                        let mut spenders: HashSet<Address> = HashSet::new();
+                        for d in &client.cfg.dexes {
+                            if let Some(r) = &d.router {
+                                if let Ok(a) = parse_addr(r) {
+                                    spenders.insert(a);
+                                }
+                            }
+                            if let Some(r) = &d.swap_router02 {
+                                if let Ok(a) = parse_addr(r) {
+                                    spenders.insert(a);
+                                }
+                            }
+                            if let Some(r) = &d.universal_router {
+                                if let Ok(a) = parse_addr(r) {
+                                    spenders.insert(a);
+                                }
+                            }
+                            if let Some(r) = &d.smart_router {
+                                if let Ok(a) = parse_addr(r) {
+                                    spenders.insert(a);
+                                }
+                            }
+                        }
+                        let spenders: Vec<Address> = spenders.into_iter().collect();
+                        let tokens: Vec<Address> = client
+                            .cfg
+                            .tokens
+                            .values()
+                            .filter_map(|t| parse_addr(&t.address).ok())
+                            .collect();
+                        let min_allowance = U256::from_dec_str("1000000000000000000000000")?;
+                        ensure_approvals(
+                            signer_client.clone(),
+                            &client.cfg,
+                            tokens,
+                            spenders,
+                            min_allowance,
+                        )
+                        .await?;
+                    }
                 }
                 Err(e) => tracing::warn!("Signer init failed for chain_id={}: {e:#}", chain_id),
             }
@@ -138,8 +190,15 @@ impl StrategyEngine {
                 let b = addr_of(&client.cfg, &r.pair[1])?;
 
                 // Эвристика ликвидности (пока без резервов — пропускаем проверку)
-                let _ok_liq =
-                    self.meets_min_liquidity_hint(&client.cfg, &r.pair[0], &r.pair[1], None, None, Some(a), Some(b));
+                let _ok_liq = self.meets_min_liquidity_hint(
+                    &client.cfg,
+                    &r.pair[0],
+                    &r.pair[1],
+                    None,
+                    None,
+                    Some(a),
+                    Some(b),
+                );
 
                 // TODO: квотинг dexA->dexB со slippage=slip_bps и проверкой min_profit_bps
             }
@@ -147,7 +206,9 @@ impl StrategyEngine {
 
         // -------- Треугольники
         for tri in &client.cfg.triangles {
-            if self.skip_pair_by_risk(&client.cfg, &tri[0], &tri[1]) || self.skip_pair_by_risk(&client.cfg, &tri[1], &tri[2]) {
+            if self.skip_pair_by_risk(&client.cfg, &tri[0], &tri[1])
+                || self.skip_pair_by_risk(&client.cfg, &tri[1], &tri[2])
+            {
                 continue;
             }
 
@@ -190,7 +251,10 @@ impl StrategyEngine {
                     max_priority_fee_per_gas: None,
                     private_relay: None,
                 };
-                if let Ok(_tx) = exec.execute_with_opts(Bytes::from_static(b""), U256::zero(), opts).await {
+                if let Ok(_tx) = exec
+                    .execute_with_opts(Bytes::from_static(b""), U256::zero(), opts)
+                    .await
+                {
                     METRIC_TX_SENT.inc();
                     any_success = true;
                 }
