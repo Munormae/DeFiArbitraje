@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::{env, fs};
@@ -23,8 +23,8 @@ impl Config {
         let data = fs::read_to_string(path)?;
         let mut c: Self = serde_json::from_str(&data)?;
         c.expand_env_in_rpcs();
-        c.normalize_addresses();   // адреса -> lower, пары/треугольники/маршруты -> UPPER
-        c.normalize_token_keys();  // КЛЮЧИ tokens -> UPPERCASE
+        c.normalize_addresses(); // адреса -> lower, пары/треугольники/маршруты -> UPPER
+        c.normalize_token_keys(); // КЛЮЧИ tokens -> UPPERCASE
         c.validate()?;
         Ok(c)
     }
@@ -50,7 +50,7 @@ impl Config {
                         let mut j = 0usize;
                         while j < rest.len()
                             && (rest.as_bytes()[j].is_ascii_alphanumeric()
-                            || rest.as_bytes()[j] == b'_')
+                                || rest.as_bytes()[j] == b'_')
                         {
                             j += 1;
                         }
@@ -229,9 +229,7 @@ impl Config {
             ));
         }
         if !self.global.risk.permit2.is_empty() && !is_hex_addr(&self.global.risk.permit2) {
-            return Err(anyhow!(
-                "global.risk.permit2 must be 0x-address or empty"
-            ));
+            return Err(anyhow!("global.risk.permit2 must be 0x-address or empty"));
         }
 
         Ok(())
@@ -382,6 +380,8 @@ pub struct Network {
     pub chain_id: u64,
     pub native_symbol: String,
     pub rpc: Vec<String>,
+    #[serde(default, rename = "nativeUsdHint", alias = "native_usd_hint")]
+    pub native_usd_hint: Option<f64>,
     #[serde(default)]
     pub explorer: Option<String>,
     #[serde(default)]
