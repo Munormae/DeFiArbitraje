@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::{env, fs};
@@ -156,7 +156,10 @@ impl Config {
                 return Err(anyhow!("network '{}' has no rpc endpoints", n.name));
             }
             if !n.permit2.is_empty() && !is_hex_addr(&n.permit2) {
-                return Err(anyhow!("network '{}' permit2 must be 0x-address or empty", n.name));
+                return Err(anyhow!(
+                    "network '{}' permit2 must be 0x-address or empty",
+                    n.name
+                ));
             }
             // токены
             for (sym, t) in &n.tokens {
@@ -391,7 +394,7 @@ pub struct Network {
     pub chain_id: u64,
     pub native_symbol: String,
     pub rpc: Vec<String>,
-    #[serde(default, rename = "nativeUsdHint", alias = "native_usd_hint")]
+    #[serde(default)]
     pub native_usd_hint: Option<f64>,
     #[serde(default)]
     pub explorer: Option<String>,
