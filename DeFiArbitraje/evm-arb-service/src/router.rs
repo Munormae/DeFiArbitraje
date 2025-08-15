@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
-use ethers::providers::{Http, Provider};
 use ethers::types::{Address, U256};
-use std::sync::Arc;
 use tracing::debug;
+
+use crate::network::ChainClient;
 
 use crate::calldata::{LegKind, LegQuote};
 use crate::config::{DexConfig, Network};
@@ -47,7 +47,7 @@ fn decimals_of(net: &Network, sym: &str) -> u8 {
 }
 
 async fn quote_on_dex(
-    client: Arc<Provider<Http>>,
+    client: &ChainClient,
     net: &Network,
     dex: &DexConfig,
     token_in_sym: &str,
@@ -66,12 +66,17 @@ async fn quote_on_dex(
             )
             .map_err(|e| anyhow!(e))?;
             let pair_addr = ensure_not_zero(
-                v2_get_pair(client.clone(), factory, token_in, token_out).await?,
+                client
+                    .with_failover(|p| v2_get_pair(p.clone(), factory, token_in, token_out))
+                    .await?,
                 "v2_get_pair",
             )?;
-            let (t0, _t1) = v2_pair_tokens(client.clone(), pair_addr).await?;
-            let (r0, r1) = V2Pair { pair: pair_addr }
-                .get_reserves(client.clone())
+            let (t0, _t1) = client
+                .with_failover(|p| v2_pair_tokens(p.clone(), pair_addr))
+                .await?;
+            let pair_obj = V2Pair { pair: pair_addr };
+            let (r0, r1) = client
+                .with_failover(|p| pair_obj.get_reserves(p.clone()))
                 .await?;
             let (res_in, res_out) = if token_in == t0 { (r0, r1) } else { (r1, r0) };
             let fee_bps = if dex.name.to_lowercase().contains("pancakev2") {
@@ -131,19 +136,24 @@ async fn quote_on_dex(
 
             let fee_tiers: Vec<u32> = dex.fee_tiers_bps.clone().unwrap_or_else(|| vec![3000]);
             for fee in fee_tiers {
-                let pool = v3_get_pool(client.clone(), factory, token_in, token_out, fee).await?;
+                let pool = client
+                    .with_failover(|p| v3_get_pool(p.clone(), factory, token_in, token_out, fee))
+                    .await?;
                 if pool == Address::zero() {
                     continue;
                 }
-                let (out, _) = v3_quote_exact_input_single(
-                    client.clone(),
-                    quoter,
-                    token_in,
-                    token_out,
-                    fee,
-                    amount_in,
-                )
-                .await?;
+                let (out, _) = client
+                    .with_failover(|p| {
+                        v3_quote_exact_input_single(
+                            p.clone(),
+                            quoter,
+                            token_in,
+                            token_out,
+                            fee,
+                            amount_in,
+                        )
+                    })
+                    .await?;
                 if out.is_zero() {
                     continue;
                 }
@@ -174,18 +184,23 @@ async fn quote_on_dex(
             .map_err(|e| anyhow!(e))?;
             // сначала volatile
             let mut stable = false;
-            let mut pair_addr =
-                solidly_get_pair(client.clone(), factory, token_in, token_out, false).await?;
+            let mut pair_addr = client
+                .with_failover(|p| solidly_get_pair(p.clone(), factory, token_in, token_out, false))
+                .await?;
             if pair_addr == Address::zero() && dex.stable_pools.unwrap_or(false) {
                 stable = true;
-                pair_addr =
-                    solidly_get_pair(client.clone(), factory, token_in, token_out, true).await?;
+                pair_addr = client
+                    .with_failover(|p| solidly_get_pair(p.clone(), factory, token_in, token_out, true))
+                    .await?;
             }
             if pair_addr == Address::zero() {
                 return Ok(None);
             }
-            let out =
-                solidly_pair_get_amount_out(client.clone(), pair_addr, amount_in, token_in).await?;
+            let out = client
+                .with_failover(|p| {
+                    solidly_pair_get_amount_out(p.clone(), pair_addr, amount_in, token_in)
+                })
+                .await?;
             if out.is_zero() {
                 return Ok(None);
             }
@@ -204,7 +219,7 @@ async fn quote_on_dex(
 }
 
 pub async fn quote_cross_dex_pair(
-    client: Arc<Provider<Http>>,
+    client: &ChainClient,
     net: &Network,
     pair: (&str, &str),
     dex_a: &DexConfig,
@@ -218,7 +233,7 @@ pub async fn quote_cross_dex_pair(
 
     let mut amount = amount_in;
     let (out1, leg1, gas1) =
-        match quote_on_dex(client.clone(), net, dex_a, sym_a, sym_b, amount).await? {
+        match quote_on_dex(client, net, dex_a, sym_a, sym_b, amount).await? {
             Some(v) => v,
             None => return Ok(None),
         };
@@ -227,7 +242,7 @@ pub async fn quote_cross_dex_pair(
     amount = out1;
 
     let (out2, leg2, gas2) =
-        match quote_on_dex(client.clone(), net, dex_b, sym_b, sym_a, amount).await? {
+        match quote_on_dex(client, net, dex_b, sym_b, sym_a, amount).await? {
             Some(v) => v,
             None => return Ok(None),
         };
@@ -236,7 +251,9 @@ pub async fn quote_cross_dex_pair(
     amount = out2;
 
     let gas_estimate = ((gas_total as f64) * 1.15).ceil() as u64;
-    let gas_price = current_gas_price_legacy(client.clone()).await?;
+    let gas_price = client
+        .with_failover(|p| current_gas_price_legacy(p.clone()))
+        .await?;
     let gas_cost_native = gas_cost_native(gas_estimate, gas_price);
     let gas_cost_usd_opt = net.native_usd_hint.map(|p| gas_cost_usd(gas_cost_native, p));
 
@@ -289,7 +306,7 @@ pub async fn quote_cross_dex_pair(
 }
 
 pub async fn quote_triangle(
-    client: Arc<Provider<Http>>,
+    client: &ChainClient,
     net: &Network,
     tri: (&str, &str, &str),
     preferred_dexes: &[String],
@@ -317,7 +334,7 @@ pub async fn quote_triangle(
         }
         let mut quoted = None;
         for d in dex_order {
-            if let Some(res) = quote_on_dex(client.clone(), net, d, tin, tout, amount).await? {
+            if let Some(res) = quote_on_dex(client, net, d, tin, tout, amount).await? {
                 quoted = Some((res.0, res.1, res.2));
                 break;
             }
@@ -332,7 +349,9 @@ pub async fn quote_triangle(
     }
 
     let gas_estimate = ((gas_total as f64) * 1.15).ceil() as u64;
-    let gas_price = current_gas_price_legacy(client.clone()).await?;
+    let gas_price = client
+        .with_failover(|p| current_gas_price_legacy(p.clone()))
+        .await?;
     let gas_cost_native = gas_cost_native(gas_estimate, gas_price);
     let gas_cost_usd_opt = net.native_usd_hint.map(|p| gas_cost_usd(gas_cost_native, p));
 
