@@ -99,7 +99,7 @@ impl StrategyEngine {
                 continue;
             }
 
-            match signer_middleware_for_chain(client.provider.clone(), *chain_id) {
+            match signer_middleware_for_chain(client.provider(), *chain_id) {
                 Ok(signer_client) => {
                     let exec = Executor::new(signer_client.clone()).await?;
                     executors.insert(*chain_id, Arc::new(exec));
@@ -282,7 +282,7 @@ impl StrategyEngine {
                         .unwrap_or(18);
                     let amount_in = u256_from_decimals(1.0, dec);
                     if let Some(qr) = quote_cross_dex_pair(
-                        client.provider.clone(),
+                        &client,
                         &client.cfg,
                         (&r.pair[0], &r.pair[1]),
                         dex_a,
