@@ -1,12 +1,13 @@
+mod approvals;
 mod config;
-mod network;
 mod dex;
-mod route;
+mod error;
 mod exec;
 mod metrics;
-mod error;
-mod utils;
 mod mev;
+mod network;
+mod route;
+mod utils;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -52,8 +53,8 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let cfg = Config::load(&cfg_path)
-        .with_context(|| format!("loading config from {}", cfg_path))?;
+    let cfg =
+        Config::load(&cfg_path).with_context(|| format!("loading config from {}", cfg_path))?;
     info!(
         "Загружен конфиг: version={}, networks={}",
         cfg.version,
@@ -115,7 +116,7 @@ async fn shutdown_signal() {
     // На Unix параллельно слушаем SIGTERM (service stop/restart и т.п.)
     #[cfg(unix)]
     let term = async {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         signal(SignalKind::terminate())
             .expect("failed to install SIGTERM handler")
             .recv()
