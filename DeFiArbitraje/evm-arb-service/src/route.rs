@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::approvals::ensure_approvals;
+use crate::calldata::encode_route_calldata;
 use crate::config::{Config, Network};
 use crate::exec::{Executor, TxOpts};
 use crate::metrics::{METRIC_PROFITABLE_FOUND, METRIC_ROUTES_SCANNED, METRIC_TX_SENT};
@@ -223,12 +224,14 @@ impl StrategyEngine {
         let mut any_success = false;
 
         if let Some(exec) = self.executors.get(&client.cfg.chain_id) {
+            let route_calldata: Bytes = encode_route_calldata(&[], U256::zero(), U256::zero())?;
+
             // 1) simulate — безопасный staticcall
-            let _ = exec.simulate(Bytes::from_static(b"")).await;
+            let _ = exec.simulate(route_calldata.clone()).await;
 
             // 2) execute — включается только по ENV (никаких случайных транзакций)
             if std::env::var("DRY_RUN_EXECUTE").is_ok() {
-                if let Ok(_tx) = exec.execute(Bytes::from_static(b""), U256::zero()).await {
+                if let Ok(_tx) = exec.execute(route_calldata.clone(), U256::zero()).await {
                     METRIC_TX_SENT.inc();
                     METRIC_PROFITABLE_FOUND.inc();
                     any_success = true;
@@ -252,7 +255,7 @@ impl StrategyEngine {
                     private_relay: None,
                 };
                 if let Ok(_tx) = exec
-                    .execute_with_opts(Bytes::from_static(b""), U256::zero(), opts)
+                    .execute_with_opts(route_calldata.clone(), U256::zero(), opts)
                     .await
                 {
                     METRIC_TX_SENT.inc();

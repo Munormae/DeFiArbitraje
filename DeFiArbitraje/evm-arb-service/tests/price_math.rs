@@ -1,7 +1,6 @@
-use pretty_assertions::assert_eq;
-use ethers::types::U256;
 use DeFiArbitraje::dex::amount_out_v2;
-use evm_arb_service::dex::amount_out_v2;
+use ethers::types::U256;
+use pretty_assertions::assert_eq;
 
 #[test]
 fn test_amount_out_v2_basic() {
