@@ -5,6 +5,7 @@ use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, U256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::approvals::ensure_approvals;
 use crate::calldata::encode_route_calldata;
@@ -153,6 +154,23 @@ impl StrategyEngine {
     }
 
     async fn scan_network(&mut self, client: &ChainClient) -> Result<()> {
+        let cooldown_sec = self.cfg.safety.circuit_breaker.cooldown_sec;
+        if self.pnl.should_cooldown(cooldown_sec) {
+            let remaining = self
+                .pnl
+                .last_loss_ts
+                .map(|ts| cooldown_sec.saturating_sub(ts.elapsed().as_secs()))
+                .unwrap_or(cooldown_sec);
+            tracing::warn!(
+                chain = client.cfg.chain_id,
+                consec_losses = self.pnl.consec_losses,
+                remaining,
+                "cooldown active ({}s). Skip",
+                remaining
+            );
+            return Ok(());
+        }
+
         // ----- circuit breaker по сериям неудач -----
         let max_losses = self.cfg.safety.circuit_breaker.max_losses_in_row;
         if self.pnl.consec_losses >= max_losses {
@@ -288,16 +306,30 @@ fn addr_of(n: &Network, sym: &str) -> Result<Address> {
 #[derive(Clone, Debug)]
 struct PnLTracker {
     consec_losses: u32,
+    last_loss_ts: Option<Instant>,
 }
 impl PnLTracker {
     fn new() -> Self {
-        Self { consec_losses: 0 }
+        Self {
+            consec_losses: 0,
+            last_loss_ts: None,
+        }
     }
     fn on_success(&mut self) {
         self.consec_losses = 0;
+        self.last_loss_ts = None;
     }
     fn on_loss(&mut self) {
         self.consec_losses = self.consec_losses.saturating_add(1);
+        self.last_loss_ts = Some(Instant::now());
+    }
+    fn should_cooldown(&self, cooldown_sec: u64) -> bool {
+        if self.consec_losses == 0 {
+            return false;
+        }
+        self.last_loss_ts
+            .map(|ts| ts.elapsed() < Duration::from_secs(cooldown_sec))
+            .unwrap_or(false)
     }
 }
 
