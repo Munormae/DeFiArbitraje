@@ -234,6 +234,8 @@ impl StrategyEngine {
         let slip_frac = bps(slip_bps as f64);
         let min_profit_frac = bps(min_profit_bps as f64);
 
+        let strategy = self.cfg.strategies.first();
+
         tracing::debug!(
             chain = client.cfg.chain_id,
             slip_bps,
@@ -247,6 +249,52 @@ impl StrategyEngine {
 
         if let Some(routes) = &client.cfg.routes_cross_dex {
             for r in routes {
+                if let Some(strat) = strategy {
+                    if strat.only_stables.unwrap_or(false) {
+                        let stables = &self.cfg.global.risk.stables;
+                        let a_stable = stables.iter().any(|s| s.eq_ignore_ascii_case(&r.pair[0]));
+                        let b_stable = stables.iter().any(|s| s.eq_ignore_ascii_case(&r.pair[1]));
+                        if !a_stable && !b_stable {
+                            tracing::debug!("skip pair {}-{}: only_stables", r.pair[0], r.pair[1]);
+                            continue;
+                        }
+                    }
+                    if let Some(dexes) = &strat.whitelist_dexes {
+                        if !r
+                            .dexes
+                            .iter()
+                            .all(|d| dexes.iter().any(|w| w.eq_ignore_ascii_case(d)))
+                        {
+                            tracing::debug!(
+                                "skip pair {}-{}: dex not whitelisted",
+                                r.pair[0],
+                                r.pair[1]
+                            );
+                            continue;
+                        }
+                    }
+                    if let Some(pairs) = &strat.whitelist_pairs {
+                        let mut ok = false;
+                        for p in pairs {
+                            if (p[0].eq_ignore_ascii_case(&r.pair[0])
+                                && p[1].eq_ignore_ascii_case(&r.pair[1]))
+                                || (p[0].eq_ignore_ascii_case(&r.pair[1])
+                                    && p[1].eq_ignore_ascii_case(&r.pair[0]))
+                            {
+                                ok = true;
+                                break;
+                            }
+                        }
+                        if !ok {
+                            tracing::debug!(
+                                "skip pair {}-{}: not in whitelist",
+                                r.pair[0],
+                                r.pair[1]
+                            );
+                            continue;
+                        }
+                    }
+                }
                 if self.skip_pair_by_risk(&client.cfg, &r.pair[0], &r.pair[1]) {
                     continue;
                 }
@@ -342,6 +390,48 @@ impl StrategyEngine {
         }
 
         for tri in &client.cfg.triangles {
+            if let Some(strat) = strategy {
+                if strat.only_stables.unwrap_or(false) {
+                    let stables = &self.cfg.global.risk.stables;
+                    let non_stable = |a: &str, b: &str| {
+                        let a_stable = stables.iter().any(|s| s.eq_ignore_ascii_case(a));
+                        let b_stable = stables.iter().any(|s| s.eq_ignore_ascii_case(b));
+                        !a_stable && !b_stable
+                    };
+                    if non_stable(&tri[0], &tri[1])
+                        || non_stable(&tri[1], &tri[2])
+                        || non_stable(&tri[2], &tri[0])
+                    {
+                        tracing::debug!(
+                            "skip triangle {}-{}-{}: only_stables",
+                            tri[0],
+                            tri[1],
+                            tri[2]
+                        );
+                        continue;
+                    }
+                }
+                if let Some(pairs) = &strat.whitelist_pairs {
+                    let in_list = |a: &str, b: &str| {
+                        pairs.iter().any(|p| {
+                            (p[0].eq_ignore_ascii_case(a) && p[1].eq_ignore_ascii_case(b))
+                                || (p[0].eq_ignore_ascii_case(b) && p[1].eq_ignore_ascii_case(a))
+                        })
+                    };
+                    if !(in_list(&tri[0], &tri[1])
+                        && in_list(&tri[1], &tri[2])
+                        && in_list(&tri[2], &tri[0]))
+                    {
+                        tracing::debug!(
+                            "skip triangle {}-{}-{}: pair not whitelisted",
+                            tri[0],
+                            tri[1],
+                            tri[2]
+                        );
+                        continue;
+                    }
+                }
+            }
             if self.skip_pair_by_risk(&client.cfg, &tri[0], &tri[1])
                 || self.skip_pair_by_risk(&client.cfg, &tri[1], &tri[2])
             {
