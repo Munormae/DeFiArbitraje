@@ -1,0 +1,10 @@
+[
+  {"inputs":[{"internalType":"bytes","name":"route","type":"bytes"}],
+   "name":"simulate","outputs":[{"internalType":"uint256","name":"expectedOut","type":"uint256"}],
+   "stateMutability":"view","type":"function"},
+  {"inputs":[
+     {"internalType":"bytes","name":"route","type":"bytes"},
+     {"internalType":"uint256","name":"minProfit","type":"uint256"}],
+   "name":"execute","outputs":[{"internalType":"int256","name":"profit","type":"int256"}],
+   "stateMutability":"nonpayable","type":"function"}
+]

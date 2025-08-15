@@ -1,0 +1,12 @@
+{
+  "name": "onchain-executor",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "hardhat": "^2.22.5",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "ethers": "^6.11.1",
+    "typescript": "^5.4.5",
+    "ts-node": "^10.9.2"
+  }
+}

@@ -1,0 +1,393 @@
+{
+  "version": "1.3.0",
+  "created_at": "2025-08-14",
+  "notes": "Конфиг выверен под 5 сетей (Base, Arbitrum, BNB, Optimism, Polygon). Исправлены адреса Uniswap на L2, добавлены USDT и CBBTC на Base, расширены пары/маршруты и стратегии. Раздел safety усилен.",
+  "global": {
+    "quote": {
+      "method_order": ["uniswap_v3_math", "v2_getReserves", "solidly_getAmountOut"],
+      "tick_liquidity_sample": 8,
+      "slippage_bps_default": 30,
+      "gas_price_mode": "auto",
+      "deadline_seconds": 120
+    },
+    "risk": {
+      "min_liquidity_usd": 20000,
+      "max_price_impact_bps": 80,
+      "stables": ["USDC", "USDT", "DAI", "USDBC", "USDCE", "FDUSD", "BUSD"],
+      "blacklist_tokens": ["FEI", "UST", "USTC", "USTW", "SQUID", "ANYRUG"],
+      "fee_on_transfer_block": true,
+      "rebase_token_block": true,
+      "permit2": "0x000000000022d473030f116ddee9f6b43ac78ba3"
+    },
+    "mev": {
+      "private_tx": true,
+      "nonce_randomize": true,
+      "max_backrun_blocks": 1,
+      "builders": {
+        "ethereum_like": ["flashbots", "bloxroute", "eden", "rsyncbuilder"]
+      }
+    },
+    "flashloan": {
+      "use_uniswap_v3_flash": true,
+      "use_balancer_flash": false,
+      "min_profit_usd": 2.5
+    },
+    "execution": {
+      "block_range_back": 24,
+      "poll_interval_ms": 350,
+      "priority_fee": "auto",
+      "max_concurrent_txs": 3,
+      "revert_retry": 1,
+      "approve_spend_on_start": true,
+      "auto_scale_notional": true
+    }
+  },
+
+  "networks": [
+    {
+      "id": "base",
+      "name": "Base",
+      "chain_id": 8453,
+      "native_symbol": "ETH",
+      "rpc": [
+        "https://base-rpc.publicnode.com",
+        "https://base.llamarpc.com",
+        "https://mainnet.base.org"
+      ],
+      "explorer": "https://basescan.org",
+      "tokens": {
+        "WETH":  { "address": "0x4200000000000000000000000000000000000006", "decimals": 18 },
+        "USDC":  { "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "decimals": 6 },
+        "USDBC": { "address": "0xd9aaece17f2641f24ae015a9dc0f42f3c2b1be3b", "decimals": 6 },
+        "USDT":  { "address": "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", "decimals": 6 },
+        "DAI":   { "address": "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", "decimals": 18 },
+        "CBBTC": { "address": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf", "decimals": 8, "optional": true },
+        "AERO":  { "address": "0x940181a94a35a4569e4529a3cdfb74ec4ea4f6bd", "decimals": 18, "optional": true }
+      },
+      "dexes": [
+        {
+          "name": "UniswapV3",
+          "type": "v3",
+          "factory": "0x33128a8fc17869897dce68ed026d694621f6fdfd",
+          "swapRouter02": "0x2626664c2603336e57b271c5c0b26f421741e481",
+          "universalRouter": "0x6ff5693b99212da76ad316178a184ab56d299b43",
+          "quoterV2_hint": true,
+          "feeTiers_bps": [100, 500, 3000, 10000]
+        },
+        {
+          "name": "AerodromeV2",
+          "type": "solidly_v2",
+          "router": "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",
+          "stablePools": true
+        }
+      ],
+      "pairs": [
+        ["WETH","USDC"],["WETH","USDBC"],["USDC","USDBC"],
+        ["WETH","DAI"],["USDC","DAI"],["USDBC","DAI"],
+        ["WETH","USDT"],["USDC","USDT"],
+        ["CBBTC","WETH"],["CBBTC","USDC"],
+        ["AERO","WETH"],["AERO","USDC"]
+      ],
+      "triangles": [
+        ["WETH","USDC","USDBC"],
+        ["WETH","USDT","USDC"],
+        ["WETH","DAI","USDC"],
+        ["WETH","DAI","USDBC"],
+        ["USDC","USDBC","DAI"]
+      ],
+      "routes_cross_dex": [
+        { "pair": ["WETH","USDC"],  "dexes": ["UniswapV3","AerodromeV2"] },
+        { "pair": ["WETH","USDBC"], "dexes": ["UniswapV3","AerodromeV2"] },
+        { "pair": ["USDC","USDBC"], "dexes": ["UniswapV3","AerodromeV2"] },
+        { "pair": ["USDC","DAI"],   "dexes": ["UniswapV3","AerodromeV2"] },
+        { "pair": ["USDC","USDT"],  "dexes": ["UniswapV3","AerodromeV2"] },
+        { "pair": ["CBBTC","USDC"], "dexes": ["UniswapV3","AerodromeV2"] }
+      ],
+      "strategy_overrides": { "min_profit_bps": 25, "slippage_bps": 8 }
+    },
+
+    {
+      "id": "arbitrum",
+      "name": "Arbitrum One",
+      "chain_id": 42161,
+      "native_symbol": "ETH",
+      "rpc": [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum-one.publicnode.com",
+        "https://arbitrum.llamarpc.com"
+      ],
+      "explorer": "https://arbiscan.io",
+      "tokens": {
+        "WETH":   { "address": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", "decimals": 18 },
+        "USDC":   { "address": "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "decimals": 6 },
+        "USDT":   { "address": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "decimals": 6 },
+        "DAI":    { "address": "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", "decimals": 18 },
+        "WBTC":   { "address": "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f", "decimals": 8 },
+        "ARB":    { "address": "0x912ce59144191c1204e64559fe8253a0e49e6548", "decimals": 18, "optional": true },
+        "LINK":   { "address": "0xf97f4df75117a78c1a5a0dbb814af92458539fb4", "decimals": 18, "optional": true },
+        "GMX":    { "address": "0xfc5a1a6eb076a2c7ad06ed22c90d7e710e35ad0a", "decimals": 18, "optional": true },
+        "WSTETH": { "address": "0x5979d7b546e38e414f7e9822514be443a4800529", "decimals": 18, "optional": true },
+        "RETH":   { "address": "0xec70dcb4a1efa46b8f2d97bf327f610ffde9de7c", "decimals": 18, "optional": true }
+      },
+      "dexes": [
+        {
+          "name": "UniswapV3",
+          "type": "v3",
+          "factory": "0x1f98431c8ad98523631ae4a59f267346ea31f984",
+          "swapRouter02": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+          "universalRouter": "0xa51afafeffdff5c5737c8e1fa58e03bc2aaeada9",
+          "quoterV2_hint": true,
+          "feeTiers_bps": [100, 500, 3000, 10000]
+        },
+        {
+          "name": "CamelotV2",
+          "type": "v2",
+          "router": "0xc873fecbd354f5a56e00e710b90ef4201db2448d",
+          "stablePools": true
+        },
+        {
+          "name": "CamelotV3",
+          "type": "v3_algebra",
+          "swapRouter": "0x1f721e2e82f6676fce4ea07a5958cf098d339e18",
+          "feeTiers_bps": [100, 500, 1000, 3000, 10000]
+        }
+      ],
+      "pairs": [
+        ["WETH","USDC"],["WETH","USDT"],["USDC","USDT"],
+        ["WETH","DAI"],["USDC","DAI"],["USDT","DAI"],
+        ["WETH","WBTC"],["USDC","WBTC"],["USDT","WBTC"],
+        ["WETH","ARB"],["WETH","LINK"],["WETH","GMX"],
+        ["WSTETH","WETH"],["RETH","WETH"],["WSTETH","USDC"]
+      ],
+      "triangles": [
+        ["WETH","USDC","USDT"],
+        ["WETH","DAI","USDC"],
+        ["WETH","WBTC","USDC"],
+        ["WETH","WSTETH","USDC"]
+      ],
+      "routes_cross_dex": [
+        { "pair": ["WETH","USDC"], "dexes": ["UniswapV3","CamelotV3","CamelotV2"] },
+        { "pair": ["USDC","USDT"], "dexes": ["UniswapV3","CamelotV2"] },
+        { "pair": ["WETH","WBTC"], "dexes": ["UniswapV3","CamelotV3"] },
+        { "pair": ["WETH","GMX"],  "dexes": ["UniswapV3","CamelotV2"] }
+      ],
+      "strategy_overrides": { "min_profit_bps": 30, "slippage_bps": 8 }
+    },
+
+    {
+      "id": "bsc",
+      "name": "BNB Chain",
+      "chain_id": 56,
+      "native_symbol": "BNB",
+      "rpc": [
+        "https://bsc.publicnode.com",
+        "https://binance.llamarpc.com",
+        "https://rpc.ankr.com/bsc"
+      ],
+      "explorer": "https://bscscan.com",
+      "tokens": {
+        "WBNB":  { "address": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "decimals": 18 },
+        "USDT":  { "address": "0x55d398326f99059ff775485246999027b3197955", "decimals": 18 },
+        "USDC":  { "address": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", "decimals": 18 },
+        "FDUSD": { "address": "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409", "decimals": 18 },
+        "BTCB":  { "address": "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c", "decimals": 18, "optional": true },
+        "CAKE":  { "address": "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82", "decimals": 18, "optional": true }
+      },
+      "dexes": [
+        { "name": "PancakeV3", "type": "v3", "smartRouter": "0x13f4ea83d0bd40e75c8222255bc855a974568dd4", "feeTiers_bps": [100, 250, 500, 2500, 10000] },
+        { "name": "PancakeV2", "type": "v2", "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e" }
+      ],
+      "pairs": [
+        ["WBNB","USDT"],["WBNB","USDC"],["WBNB","FDUSD"],
+        ["USDT","USDC"],["USDT","FDUSD"],["USDC","FDUSD"],
+        ["BTCB","USDT"],["BTCB","USDC"],["WBNB","BTCB"],
+        ["CAKE","WBNB"],["CAKE","USDT"]
+      ],
+      "triangles": [
+        ["WBNB","USDT","USDC"],
+        ["WBNB","USDC","FDUSD"],
+        ["USDT","USDC","FDUSD"]
+      ],
+      "routes_cross_dex": [
+        { "pair": ["WBNB","USDT"], "dexes": ["PancakeV3","PancakeV2"] },
+        { "pair": ["USDT","USDC"], "dexes": ["PancakeV3","PancakeV2"] },
+        { "pair": ["WBNB","FDUSD"], "dexes": ["PancakeV3","PancakeV2"] }
+      ],
+      "strategy_overrides": { "min_profit_bps": 22, "slippage_bps": 6 }
+    },
+
+    {
+      "id": "optimism",
+      "name": "Optimism",
+      "chain_id": 10,
+      "native_symbol": "ETH",
+      "rpc": [
+        "https://mainnet.optimism.io",
+        "https://optimism-rpc.publicnode.com",
+        "https://optimism.llamarpc.com"
+      ],
+      "explorer": "https://optimistic.etherscan.io",
+      "tokens": {
+        "WETH":   { "address": "0x4200000000000000000000000000000000000006", "decimals": 18 },
+        "USDC":   { "address": "0x0b2c639c533813f4aa9d7837caf62653d097ff85", "decimals": 6 },
+        "USDT":   { "address": "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", "decimals": 6 },
+        "DAI":    { "address": "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", "decimals": 18 },
+        "OP":     { "address": "0x4200000000000000000000000000000000000042", "decimals": 18, "optional": true },
+        "WSTETH": { "address": "0x1f32b1c2345538c0c6f582fcb022739c4a194ebb", "decimals": 18, "optional": true }
+      },
+      "dexes": [
+        {
+          "name": "VelodromeV2",
+          "type": "solidly_v2",
+          "router": "0xa062ae8a9c5e11aaa026fc2670b0d65ccc8b2858",
+          "stablePools": true
+        },
+        {
+          "name": "UniswapV3",
+          "type": "v3",
+          "factory": "0x1f98431c8ad98523631ae4a59f267346ea31f984",
+          "swapRouter02": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+          "universalRouter": "0x851116d9af65d1c72b1b7f9d52a7e1cf6b80af0e",
+          "quoterV2_hint": true,
+          "feeTiers_bps": [100, 500, 3000, 10000]
+        }
+      ],
+      "pairs": [
+        ["WETH","USDC"],["WETH","USDT"],["USDC","USDT"],
+        ["WETH","DAI"],["USDC","DAI"],["USDT","DAI"],
+        ["WSTETH","WETH"],["OP","WETH"],["OP","USDC"]
+      ],
+      "triangles": [
+        ["WETH","USDC","USDT"],
+        ["WETH","DAI","USDC"],
+        ["WETH","WSTETH","USDC"]
+      ],
+      "routes_cross_dex": [
+        { "pair": ["WETH","USDC"], "dexes": ["VelodromeV2","UniswapV3"] },
+        { "pair": ["USDC","USDT"], "dexes": ["VelodromeV2","UniswapV3"] },
+        { "pair": ["WSTETH","WETH"], "dexes": ["VelodromeV2","UniswapV3"] }
+      ],
+      "strategy_overrides": { "min_profit_bps": 28, "slippage_bps": 8 }
+    },
+
+    {
+      "id": "polygon",
+      "name": "Polygon PoS",
+      "chain_id": 137,
+      "native_symbol": "POL",
+      "rpc": [
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon.llamarpc.com",
+        "https://rpc.ankr.com/polygon"
+      ],
+      "explorer": "https://polygonscan.com",
+      "tokens": {
+        "WMATIC": { "address": "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270", "decimals": 18 },
+        "USDC":   { "address": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", "decimals": 6 },
+        "USDCE":  { "address": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", "decimals": 6 },
+        "USDT":   { "address": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", "decimals": 6 },
+        "WETH":   { "address": "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", "decimals": 18, "optional": true },
+        "WBTC":   { "address": "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", "decimals": 8, "optional": true }
+      },
+      "dexes": [
+        {
+          "name": "QuickSwapV2",
+          "type": "v2",
+          "router": "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+          "factory": "0x5757371414417b8c6caad45baef941abc7d3ab32"
+        },
+        {
+          "name": "UniswapV3",
+          "type": "v3",
+          "factory": "0x1f98431c8ad98523631ae4a59f267346ea31f984",
+          "swapRouter02": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+          "universalRouter": "0x1095692a8ed9df1f6f14e0fe70e3faa46f8004bb",
+          "quoterV2_hint": true,
+          "feeTiers_bps": [100, 500, 3000, 10000]
+        }
+      ],
+      "pairs": [
+        ["WMATIC","USDC"],["WMATIC","USDT"],["USDC","USDT"],
+        ["USDC","USDCE"],["WETH","USDC"],["WETH","USDCE"],
+        ["WBTC","USDC"],["WBTC","WETH"],["WMATIC","WETH"]
+      ],
+      "triangles": [
+        ["WMATIC","USDC","USDT"],
+        ["USDC","USDT","USDCE"],
+        ["WETH","USDC","USDCE"],
+        ["WMATIC","WETH","USDC"]
+      ],
+      "routes_cross_dex": [
+        { "pair": ["USDC","USDCE"], "dexes": ["QuickSwapV2","UniswapV3"] },
+        { "pair": ["WETH","USDC"],  "dexes": ["QuickSwapV2","UniswapV3"] },
+        { "pair": ["WBTC","USDC"],  "dexes": ["QuickSwapV2","UniswapV3"] }
+      ],
+      "strategy_overrides": { "min_profit_bps": 24, "slippage_bps": 7 }
+    }
+  ],
+
+  "strategies": [
+    {
+      "name": "cross_dex_spread",
+      "description": "Кросс-DEX спред на одинаковых парах в пределах одной сети.",
+      "min_profit_bps": 18,
+      "max_notional_usd": 95,
+      "slippage_bps": 6,
+      "use_flash": true,
+      "max_route_hops": 2,
+      "gas_limit": 1500000,
+      "mev": { "rpc_protect": true, "nonce_jitter": true }
+    },
+    {
+      "name": "triangular_arbitrage",
+      "description": "Треугольные циклы (A→B→C→A) на одной сети.",
+      "min_profit_bps": 22,
+      "slippage_bps": 8,
+      "gas_limit": 1800000,
+      "search_space": "all_config_triangles",
+      "mev": { "rpc_protect": true }
+    },
+    {
+      "name": "stable_stable_mispricing",
+      "description": "Миспрейсинг между вариациями стейблов (USDC vs USDBC/ USDCE; USDT/DAI/FDUSD).",
+      "only_stables": true,
+      "min_profit_bps": 6,
+      "slippage_bps": 3,
+      "gas_limit": 1200000
+    },
+    {
+      "name": "eth_btc_basis",
+      "description": "ETH/WETH/WBTC/CBBTC/стейблы — простые парные и кросс-DEX маршруты.",
+      "pairs_hint": [["WETH","USDC"],["WETH","USDT"],["WETH","DAI"],["WBTC","USDC"],["CBBTC","USDC"],["WBTC","WETH"]],
+      "min_profit_bps": 20,
+      "slippage_bps": 7,
+      "gas_limit": 1500000
+    }
+  ],
+
+  "routing": {
+    "price_simulation": {
+      "slippage_checks": true,
+      "virtual_reserves_boost_bps": 5,
+      "max_split_paths": 2
+    },
+    "route_templates": [
+      { "type": "direct", "max_hops": 1 },
+      { "type": "split",  "max_hops": 1, "legs": 2 },
+      { "type": "triangular", "max_hops": 3 }
+    ]
+  },
+
+  "safety": {
+    "allow_revert_on_no_profit": true,
+    "halt_on_large_slippage_bps": 120,
+    "halt_on_volatility_index": 0.12,
+    "circuit_breaker": { "max_losses_in_row": 1, "cooldown_sec": 120 }
+  },
+
+  "telemetry": {
+    "prometheus": { "enabled": true, "port": 9091 },
+    "logs": { "level": "info", "json": true },
+    "alerts": { "email": false, "tg_bot": false }
+  }
+}
