@@ -2,18 +2,58 @@ use anyhow::{Result, anyhow};
 use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, Bytes, U256};
+use ethers::types::{Address, U256};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::approvals::ensure_approvals;
 use crate::calldata::encode_route_calldata;
 use crate::config::{Config, Network};
-use crate::exec::{Executor, TxOpts};
+use crate::exec::Executor;
 use crate::metrics::{METRIC_PROFITABLE_FOUND, METRIC_ROUTES_SCANNED, METRIC_TX_SENT};
 use crate::network::{ChainClient, MultiChain};
+use crate::router::{QuoteResult, quote_cross_dex_pair};
 use crate::utils::{bps, parse_addr, u256_from_decimals};
+
+fn run_mode() -> Option<&'static str> {
+    if std::env::var("SAFE_LAUNCH")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        Some("SAFE")
+    } else if std::env::var("DRY_RUN").map(|v| v == "1").unwrap_or(false) {
+        Some("DRY")
+    } else {
+        None
+    }
+}
+
+fn log_candidate(chain_id: u64, pair_or_tri: &str, legs: usize, qr: &QuoteResult) {
+    if let Err(e) = (|| -> Result<()> {
+        std::fs::create_dir_all("logs")?;
+        let path = format!("logs/candidates-{}.jsonl", chain_id);
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let line = json!({
+            "ts": ts,
+            "chain_id": chain_id,
+            "pair_or_tri": pair_or_tri,
+            "legs": legs,
+            "amount_in": qr.amount_in.to_string(),
+            "amount_out": qr.amount_out.to_string(),
+            "gas_estimate": qr.gas_estimate,
+            "pnl_usd": qr.pnl_usd,
+        });
+        writeln!(file, "{}", line.to_string())?;
+        Ok(())
+    })() {
+        tracing::error!("candidate log error: {e:#}");
+    }
+}
 
 // ===== Route Planner =====
 #[derive(Clone)]
@@ -63,45 +103,49 @@ impl StrategyEngine {
                     tracing::info!("Executor инициализирован для chain_id={}", chain_id);
 
                     if cfg.global.execution.approve_spend_on_start {
-                        let mut spenders: HashSet<Address> = HashSet::new();
-                        for d in &client.cfg.dexes {
-                            if let Some(r) = &d.router {
-                                if let Ok(a) = parse_addr(r) {
-                                    spenders.insert(a);
+                        if let Some(mode) = run_mode() {
+                            tracing::info!("{mode}: skip approvals");
+                        } else {
+                            let mut spenders: HashSet<Address> = HashSet::new();
+                            for d in &client.cfg.dexes {
+                                if let Some(r) = &d.router {
+                                    if let Ok(a) = parse_addr(r) {
+                                        spenders.insert(a);
+                                    }
+                                }
+                                if let Some(r) = &d.swap_router02 {
+                                    if let Ok(a) = parse_addr(r) {
+                                        spenders.insert(a);
+                                    }
+                                }
+                                if let Some(r) = &d.universal_router {
+                                    if let Ok(a) = parse_addr(r) {
+                                        spenders.insert(a);
+                                    }
+                                }
+                                if let Some(r) = &d.smart_router {
+                                    if let Ok(a) = parse_addr(r) {
+                                        spenders.insert(a);
+                                    }
                                 }
                             }
-                            if let Some(r) = &d.swap_router02 {
-                                if let Ok(a) = parse_addr(r) {
-                                    spenders.insert(a);
-                                }
-                            }
-                            if let Some(r) = &d.universal_router {
-                                if let Ok(a) = parse_addr(r) {
-                                    spenders.insert(a);
-                                }
-                            }
-                            if let Some(r) = &d.smart_router {
-                                if let Ok(a) = parse_addr(r) {
-                                    spenders.insert(a);
-                                }
-                            }
+                            let spenders: Vec<Address> = spenders.into_iter().collect();
+                            let tokens: Vec<Address> = client
+                                .cfg
+                                .tokens
+                                .values()
+                                .filter_map(|t| parse_addr(&t.address).ok())
+                                .collect();
+                            let min_allowance = U256::from_dec_str("1000000000000000000000000")?;
+                            ensure_approvals(
+                                signer_client.clone(),
+                                &client.cfg,
+                                tokens,
+                                spenders,
+                                min_allowance,
+                            )
+                            .await?;
                         }
-                        let spenders: Vec<Address> = spenders.into_iter().collect();
-                        let tokens: Vec<Address> = client
-                            .cfg
-                            .tokens
-                            .values()
-                            .filter_map(|t| parse_addr(&t.address).ok())
-                            .collect();
-                        let min_allowance = U256::from_dec_str("1000000000000000000000000")?;
-                        ensure_approvals(
-                            signer_client.clone(),
-                            &client.cfg,
-                            tokens,
-                            spenders,
-                            min_allowance,
-                        )
-                        .await?;
                     }
                 }
                 Err(e) => tracing::warn!("Signer init failed for chain_id={}: {e:#}", chain_id),
@@ -171,7 +215,6 @@ impl StrategyEngine {
             return Ok(());
         }
 
-        // ----- circuit breaker по сериям неудач -----
         let max_losses = self.cfg.safety.circuit_breaker.max_losses_in_row;
         if self.pnl.consec_losses >= max_losses {
             tracing::warn!(
@@ -194,10 +237,11 @@ impl StrategyEngine {
             min_profit_bps,
             slip_frac,
             min_profit_frac,
-            "network overrides"
+            "network overrides",
         );
 
-        // -------- Кросс-DEX пары
+        let mut any_success = false;
+
         if let Some(routes) = &client.cfg.routes_cross_dex {
             for r in routes {
                 if self.skip_pair_by_risk(&client.cfg, &r.pair[0], &r.pair[1]) {
@@ -208,7 +252,6 @@ impl StrategyEngine {
                 let a = addr_of(&client.cfg, &r.pair[0])?;
                 let b = addr_of(&client.cfg, &r.pair[1])?;
 
-                // Эвристика ликвидности (пока без резервов — пропускаем проверку)
                 let _ok_liq = self.meets_min_liquidity_hint(
                     &client.cfg,
                     &r.pair[0],
@@ -219,11 +262,67 @@ impl StrategyEngine {
                     Some(b),
                 );
 
-                // TODO: квотинг dexA->dexB со slippage=slip_bps и проверкой min_profit_bps
+                if r.dexes.len() >= 2 {
+                    let dex_a = match client.cfg.dexes.iter().find(|d| d.name == r.dexes[0]) {
+                        Some(d) => d,
+                        None => continue,
+                    };
+                    let dex_b = match client.cfg.dexes.iter().find(|d| d.name == r.dexes[1]) {
+                        Some(d) => d,
+                        None => continue,
+                    };
+                    let dec = client
+                        .cfg
+                        .tokens
+                        .get(&r.pair[0])
+                        .map(|t| t.decimals)
+                        .unwrap_or(18);
+                    let amount_in = u256_from_decimals(1.0, dec);
+                    if let Some(qr) = quote_cross_dex_pair(
+                        client.provider.clone(),
+                        &client.cfg,
+                        (&r.pair[0], &r.pair[1]),
+                        dex_a,
+                        dex_b,
+                        amount_in,
+                        slip_bps,
+                    )
+                    .await?
+                    {
+                        let profit = qr.amount_out.saturating_sub(qr.amount_in);
+                        let min_profit = qr.amount_in * U256::from(min_profit_bps as u64)
+                            / U256::from(10_000u64);
+                        if profit < min_profit {
+                            continue;
+                        }
+                        log_candidate(
+                            client.cfg.chain_id,
+                            &format!("{}-{}", r.pair[0], r.pair[1]),
+                            qr.legs.len(),
+                            &qr,
+                        );
+                        if let Some(exec) = self.executors.get(&client.cfg.chain_id) {
+                            let route_calldata =
+                                encode_route_calldata(&qr.legs, qr.amount_in, qr.amount_out)?;
+                            let _ = exec.simulate(route_calldata.clone()).await;
+                            if let Some(mode) = run_mode() {
+                                tracing::info!(
+                                    chain = client.cfg.chain_id,
+                                    "{mode}: not sending tx"
+                                );
+                            } else if let Ok(_tx) =
+                                exec.execute(route_calldata.clone(), U256::zero()).await
+                            {
+                                METRIC_TX_SENT.inc();
+                                METRIC_PROFITABLE_FOUND.inc();
+                                any_success = true;
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // -------- Треугольники
         for tri in &client.cfg.triangles {
             if self.skip_pair_by_risk(&client.cfg, &tri[0], &tri[1])
                 || self.skip_pair_by_risk(&client.cfg, &tri[1], &tri[2])
@@ -238,51 +337,6 @@ impl StrategyEngine {
             // TODO: котировка A→B→C→A
         }
 
-        // -------- Демонстрационные вызовы Executor (если он есть)
-        let mut any_success = false;
-
-        if let Some(exec) = self.executors.get(&client.cfg.chain_id) {
-            let route_calldata: Bytes = encode_route_calldata(&[], U256::zero(), U256::zero())?;
-
-            // 1) simulate — безопасный staticcall
-            let _ = exec.simulate(route_calldata.clone()).await;
-
-            // 2) execute — включается только по ENV (никаких случайных транзакций)
-            if std::env::var("DRY_RUN_EXECUTE").is_ok() {
-                if let Ok(_tx) = exec.execute(route_calldata.clone(), U256::zero()).await {
-                    METRIC_TX_SENT.inc();
-                    METRIC_PROFITABLE_FOUND.inc();
-                    any_success = true;
-                }
-            }
-
-            // 3) execute_with_opts — тоже только по ENV
-            if std::env::var("DRY_RUN_EXECUTE_OPTS").is_ok() {
-                let opts = TxOpts {
-                    private: false,
-                    gas_jitter: Some(crate::mev::GasJitterCfg {
-                        jitter_bps: 50,
-                        max_fee_multiplier: 1.2,
-                        priority_fee_gwei: 2,
-                    }),
-                    gas_limit: Some(200_000),
-                    // 1 gwei = 10^9 wei
-                    legacy_gas_price: Some(u256_from_decimals(1.0, 9)),
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    private_relay: None,
-                };
-                if let Ok(_tx) = exec
-                    .execute_with_opts(route_calldata.clone(), U256::zero(), opts)
-                    .await
-                {
-                    METRIC_TX_SENT.inc();
-                    any_success = true;
-                }
-            }
-        }
-
-        // ---- обновляем счётчик серий ----
         if any_success {
             self.pnl.on_success();
         } else {
