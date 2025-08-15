@@ -94,9 +94,17 @@ impl Config {
                     *s = s.trim().to_uppercase();
                 }
             }
+            if !net.permit2.is_empty() {
+                net.permit2 = net.permit2.trim().to_lowercase();
+            }
         }
         if !self.global.risk.permit2.is_empty() {
             self.global.risk.permit2 = self.global.risk.permit2.trim().to_lowercase();
+            for net in &mut self.networks {
+                if net.permit2.is_empty() {
+                    net.permit2 = self.global.risk.permit2.clone();
+                }
+            }
         }
     }
 
@@ -146,6 +154,9 @@ impl Config {
             }
             if n.rpc.is_empty() {
                 return Err(anyhow!("network '{}' has no rpc endpoints", n.name));
+            }
+            if !n.permit2.is_empty() && !is_hex_addr(&n.permit2) {
+                return Err(anyhow!("network '{}' permit2 must be 0x-address or empty", n.name));
             }
             // токены
             for (sym, t) in &n.tokens {
@@ -396,6 +407,8 @@ pub struct Network {
     pub routes_cross_dex: Option<Vec<RouteDex>>,
     #[serde(default)]
     pub strategy_overrides: Option<StrategyOverrides>,
+    #[serde(default)]
+    pub permit2: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
